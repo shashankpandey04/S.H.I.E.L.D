@@ -67,12 +67,18 @@ class EmailAnalysisResponse(BaseModel):
     storage_path: str | None = None
     uploaded_at: datetime | str
     status: str
+    user_id: str | None = None
     email: dict[str, Any]
     authentication: dict[str, Any]
     urls: dict[str, Any]
     url_analysis: dict[str, Any]
     header_analysis: dict[str, Any]
     risk_assessment: dict[str, Any]
+    relay_analysis: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    scoring_details: dict[str, Any] = Field(default_factory=dict)
+    subjective_logic: dict[str, Any] = Field(default_factory=dict)
+    campaign_correlation: dict[str, Any] = Field(default_factory=dict)
 
 
 class EmailListResponse(BaseModel):

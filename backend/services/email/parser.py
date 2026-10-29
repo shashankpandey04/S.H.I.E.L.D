@@ -1,6 +1,7 @@
 from email import policy
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
+import hashlib
 from typing import Any
 
 
@@ -79,6 +80,8 @@ def extract_attachments(message: Any) -> list[dict[str, Any]]:
                 "filename": filename or "unnamed_attachment",
                 "content_type": part.get_content_type(),
                 "size": len(payload_bytes),
+                "sha256": hashlib.sha256(payload_bytes).hexdigest(),
+                "md5": hashlib.md5(payload_bytes).hexdigest(),
             })
 
     return attachments

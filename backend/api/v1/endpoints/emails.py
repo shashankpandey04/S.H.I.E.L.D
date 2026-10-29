@@ -2,21 +2,31 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pymongo.errors import PyMongoError
 
 from core.config import settings
 from core.database import emails_collection
+from core.security import get_optional_current_user
 from core.storage import delete_email_file, upload_email_file
 from schemas.email import EmailAnalysisResponse, EmailListResponse
 from services.authentication.verifier import analyze_authentication
 from services.email.header_analyzer import analyze_header_consistency
 from services.email.parser import parse_eml
+from services.email.relay_analyzer import analyze_relays
 from services.email.risk_scorer import score_risk
 from services.email.url_analyzer import analyze_email_urls
 from services.email.url_extractor import extract_email_urls
+from services.evidence.normalizer import normalize_forensic_evidence
+from services.investigation.graph_service import (
+    correlate_email_campaigns,
+    index_email_graph_entities,
+)
+from services.scoring.formula_scorer import calculate_formula_score
+from services.scoring.subjective_logic import evaluate_subjective_logic
 from utils.hashing import calculate_sha256
 
 router = APIRouter()
@@ -25,7 +35,10 @@ MAX_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
 @router.post("/upload", status_code=201, response_model=EmailAnalysisResponse)
-async def upload_email(file: UploadFile = File(...)):
+async def upload_email(
+    file: UploadFile = File(...),
+    current_user: dict[str, Any] | None = Depends(get_optional_current_user),
+):
     if not file.filename:
         raise HTTPException(
             status_code=400,
@@ -75,6 +88,24 @@ async def upload_email(file: UploadFile = File(...)):
             header_analysis,
         )
 
+        received_headers = (parsed_email.get("headers") or {}).get("received") or []
+        relay_analysis = analyze_relays(received_headers)
+
+        evidence_objs = normalize_forensic_evidence(
+            parsed_email,
+            authentication,
+            url_analysis,
+            header_analysis,
+            relay_analysis,
+            investigation_id=email_id,
+        )
+        scoring_breakdown = calculate_formula_score(evidence_objs)
+        opinion_model = evaluate_subjective_logic(evidence_objs)
+
+        evidence_data = [ev.model_dump() for ev in evidence_objs]
+        scoring_data = scoring_breakdown.model_dump()
+        opinion_data = opinion_model.model_dump()
+
         try:
             await asyncio.to_thread(upload_email_file, file_data, storage_path)
         except Exception as exc:
@@ -85,6 +116,21 @@ async def upload_email(file: UploadFile = File(...)):
             ) from exc
 
         uploaded_at = datetime.now(timezone.utc)
+        user_id = current_user.get("id") if isinstance(current_user, dict) else None
+
+        try:
+            await index_email_graph_entities(email_id, parsed_email, urls, relay_analysis)
+            campaign_correlation = await correlate_email_campaigns(
+                email_id, parsed_email, urls, relay_analysis
+            )
+        except Exception:
+            campaign_correlation = {
+                "campaign_id": None,
+                "is_correlated": False,
+                "confidence": 0.0,
+                "related_email_ids": [],
+                "reasons": [],
+            }
 
         document = {
             "_id": email_id,
@@ -92,12 +138,18 @@ async def upload_email(file: UploadFile = File(...)):
             "sha256": file_hash,
             "storage_path": storage_path,
             "uploaded_at": uploaded_at,
+            "user_id": user_id,
             "email": parsed_email,
             "authentication": authentication,
             "urls": urls,
             "url_analysis": url_analysis,
             "header_analysis": header_analysis,
             "risk_assessment": risk_assessment,
+            "relay_analysis": relay_analysis,
+            "evidence": evidence_data,
+            "scoring_details": scoring_data,
+            "subjective_logic": opinion_data,
+            "campaign_correlation": campaign_correlation,
             "status": "analyzed",
         }
 
@@ -120,12 +172,18 @@ async def upload_email(file: UploadFile = File(...)):
             "storage_path": storage_path,
             "uploaded_at": uploaded_at,
             "status": document["status"],
+            "user_id": user_id,
             "email": parsed_email,
             "authentication": authentication,
             "urls": urls,
             "url_analysis": url_analysis,
             "header_analysis": header_analysis,
             "risk_assessment": risk_assessment,
+            "relay_analysis": relay_analysis,
+            "evidence": evidence_data,
+            "scoring_details": scoring_data,
+            "subjective_logic": opinion_data,
+            "campaign_correlation": campaign_correlation,
         }
 
     except HTTPException:

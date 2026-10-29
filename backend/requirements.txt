@@ -7,3 +7,5 @@ dkimpy
 pymongo
 supabase
 python-dotenv
+pyjwt
+cryptography

@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = "placeholder_key"
     SUPABASE_EMAILS_BUCKET: str = "emails"
 
+    JWT_SECRET_KEY: str = "shield-forensics-insecure-default-change-in-production-key-32b"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
     MAX_UPLOAD_SIZE_MB: int = 25
 
     model_config = SettingsConfigDict(
